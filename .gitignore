@@ -1,0 +1,15 @@
+# Local environment
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local application data
+justiceconnect.db
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Streamlit cache
+.streamlit/secrets.toml
