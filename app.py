@@ -247,7 +247,7 @@ def init_db():
         VALUES (?, ?)
         ON CONFLICT(username) DO UPDATE SET password = excluded.password
         """,
-        ("Hemu", "hemu5622s")
+        ("Hemu", "hemu@5622s")
     )
 
     cur.execute(
