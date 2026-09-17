@@ -232,6 +232,20 @@ def get_all_complaints():
 
     return rows
 
+def get_complaints_by_mobile(mobile):
+    conn = get_db()
+
+    rows = conn.execute("""
+        SELECT *
+        FROM complaints
+        WHERE mobile = ?
+        ORDER BY id DESC
+    """, (mobile,)).fetchall()
+
+    conn.close()
+
+    return rows
+
 def login_admin(username, password):
     conn = get_db()
 
@@ -261,36 +275,167 @@ if "admin_logged_in" not in st.session_state:
 
 st.markdown("""
 <style>
-.main-title {
-    font-size: 42px;
-    font-weight: 800;
-    margin-bottom: 0;
-}
+    .main-title {
+        font-size: 42px;
+        font-weight: 800;
+        margin-bottom: 0;
+    }
 
-.subtitle {
-    font-size: 18px;
-    color: #666;
-}
+    .hero {
+        background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 45%, #3b82f6 100%);
+        border-radius: 24px;
+        padding: 32px 28px;
+        margin-bottom: 22px;
+        box-shadow: 0 16px 40px rgba(30, 64, 175, 0.22);
+    }
 
-.card {
-    padding: 20px;
-    border-radius: 15px;
-    border: 1px solid #ddd;
-    background: #ffffff;
-    margin-bottom: 15px;
-}
+    .hero-badge {
+        display: inline-block;
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(255,255,255,0.2);
+        color: #e0f2fe;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        border-radius: 999px;
+        padding: 8px 14px;
+        margin-bottom: 14px;
+    }
 
-.status {
-    font-size: 18px;
-    font-weight: bold;
-}
+    .hero-title {
+        font-size: clamp(2.2rem, 4vw, 3.7rem);
+        line-height: 1.1;
+        font-weight: 800;
+        color: #ffffff;
+        margin: 0 0 14px 0;
+    }
 
-.attachment-box {
-    padding: 15px;
-    border: 1px solid #ddd;
-    border-radius: 12px;
-    margin-top: 10px;
-}
+    .hero-subtitle {
+        color: #dbeafe;
+        font-size: 1.08rem;
+        max-width: 680px;
+        margin-bottom: 18px;
+    }
+
+    .hero-pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+    }
+
+    .hero-pill {
+        background: rgba(255,255,255,0.12);
+        border: 1px solid rgba(255,255,255,0.18);
+        color: #f8fafc;
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 0.82rem;
+        font-weight: 600;
+    }
+
+    .section-label {
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #2563eb;
+        font-weight: 700;
+        margin-bottom: 10px;
+    }
+
+    .feature-card {
+        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+        border: 1px solid #dfe8f5;
+        border-radius: 20px;
+        padding: 22px 20px;
+        height: 100%;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+    }
+
+    .feature-card h3 {
+        margin: 12px 0 8px 0;
+        color: #0f172a;
+        font-size: 1.2rem;
+    }
+
+    .feature-card p {
+        margin: 0;
+        color: #475569;
+        line-height: 1.6;
+    }
+
+    .info-panel {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 18px;
+        padding: 18px 20px;
+        margin-top: 8px;
+    }
+
+    .info-panel h4 {
+        margin: 0 0 10px 0;
+        color: #1e3a8a;
+    }
+
+    .step-box {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 18px;
+        padding: 18px 16px;
+        text-align: center;
+        height: 100%;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+    }
+
+    .step-number {
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #1d4ed8, #60a5fa);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 800;
+        margin: 0 auto 12px auto;
+    }
+
+    .step-box h4 {
+        margin: 0 0 8px 0;
+        color: #0f172a;
+    }
+
+    .step-box p {
+        margin: 0;
+        color: #475569;
+        line-height: 1.55;
+    }
+
+    .subtitle {
+        font-size: 18px;
+        color: #666;
+    }
+
+    .card {
+        padding: 20px;
+        border-radius: 15px;
+        border: 1px solid #ddd;
+        background: #ffffff;
+        margin-bottom: 15px;
+    }
+
+    .status {
+        font-size: 18px;
+        font-weight: bold;
+    }
+
+    .attachment-box {
+        padding: 15px;
+        border: 1px solid #ddd;
+        border-radius: 12px;
+        margin-top: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -318,71 +463,127 @@ menu = st.sidebar.radio(
 if menu == t("Home", "హోమ్"):
 
     st.markdown(
-        '<div class="main-title">⚖️ JusticeConnect</div>',
+        """
+        <div class="hero">
+            <div class="hero-badge">⚖️ JusticeConnect</div>
+            <h1 class="hero-title">A stronger voice for every citizen.</h1>
+            <p class="hero-subtitle">Report issues, understand your rights, access government services, and track every update in one secure, transparent platform.</p>
+            <div class="hero-pill-row">
+                <span class="hero-pill">📝 Complaint Reporting</span>
+                <span class="hero-pill">🔎 Smart Tracking</span>
+                <span class="hero-pill">⚖️ Rights & Support</span>
+            </div>
+        </div>
+        """,
         unsafe_allow_html=True
     )
+
+    col_left, col_right = st.columns([2.2, 1])
+
+    with col_left:
+        st.markdown(
+            f'<div class="section-label">{t("Why it matters", "ఎందుకు ముఖ్యమైనది")}</div>',
+            unsafe_allow_html=True
+        )
+        st.markdown(
+            f'<div class="subtitle">{t("JusticeConnect gives citizens a clear path to report problems, access public services, learn their rights, and stay informed through transparent grievance handling.", "JusticeConnect పౌరులకు సమస్యలను నివేదించడం, ప్రభుత్వ సేవలను ఉపయోగించడం, వారి హక్కులను తెలుసుకోవడం మరియు పారదర్శకమైన ఫిర్యాదు పరిష్కారం ద్వారా సమాచారం పొందే స్పష్టమైన మార్గాన్ని అందిస్తుంది.")}</div>',
+            unsafe_allow_html=True
+        )
+
+    with col_right:
+        st.markdown(
+            """
+            <div class="info-panel">
+                <h4>📊 Platform Snapshot</h4>
+                <div style="display: grid; gap: 12px;">
+                    <div><strong>Public reporting</strong><br><span style="color:#475569;">Simple complaint submission</span></div>
+                    <div><strong>Live status tracking</strong><br><span style="color:#475569;">Track each update with a complaint ID</span></div>
+                    <div><strong>Rights guidance</strong><br><span style="color:#475569;">Understand available civic protections</span></div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
     st.markdown(
-        f'<div class="subtitle">{t("A citizen-first platform for complaints, rights, government services and transparent tracking.", "ఫిర్యాదులు, హక్కులు, ప్రభుత్వ సేవలు మరియు పారదర్శకమైన ట్రాకింగ్ కోసం పౌర కేంద్రిత వేదిక.")}</div>',
+        f'<div class="section-label" style="margin-top: 26px;">{t("What you can do", "మీరు ఏమి చేయగలరు")}</div>',
         unsafe_allow_html=True
     )
 
-    st.divider()
+    c1, c2, c3 = st.columns(3)
 
-    st.info(
-        t(
-            "Aligned with UN Sustainable Development Goal 16: Peace, Justice and Strong Institutions.",
-            "ఐక్యరాజ్య సమితి SDG 16: శాంతి, న్యాయం మరియు బలమైన సంస్థలకు అనుగుణంగా రూపొందించబడింది."
+    with c1:
+        st.markdown(
+            """
+            <div class="feature-card">
+                <div style="font-size: 2rem;">📝</div>
+                <h3>Report</h3>
+                <p>Submit civic issues, local problems, or service complaints in a few simple steps.</p>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
-    )
 
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.markdown("""
-        <div class="card">
-        <h2>📝 Report</h2>
-        <p>Submit a public problem or complaint easily.</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col2:
-        st.markdown("""
-        <div class="card">
-        <h2>🔎 Track</h2>
-        <p>Use your Complaint ID to check progress.</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with col3:
-        st.markdown("""
-        <div class="card">
-        <h2>⚖️ Rights</h2>
-        <p>Understand basic rights and available guidance.</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.subheader(
-        t(
-            "How JusticeConnect Works",
-            "JusticeConnect ఎలా పనిచేస్తుంది"
+    with c2:
+        st.markdown(
+            """
+            <div class="feature-card">
+                <div style="font-size: 2rem;">🔎</div>
+                <h3>Track</h3>
+                <p>Use your Complaint ID to review the latest status and updates in real time.</p>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
+
+    with c3:
+        st.markdown(
+            """
+            <div class="feature-card">
+                <div style="font-size: 2rem;">⚖️</div>
+                <h3>Rights</h3>
+                <p>Learn about citizen rights, grievance channels, and public service access.</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    st.markdown(
+        f'<div class="section-label" style="margin-top: 26px;">{t("How it works", "ఇది ఎలా పనిచేస్తుంది")}</div>',
+        unsafe_allow_html=True
     )
 
     steps = [
-        ("1", "Report", "Citizen submits a complaint"),
-        ("2", "Complaint ID", "System generates a unique ID"),
-        ("3", "Review", "Concerned department reviews it"),
-        ("4", "Track", "Citizen checks progress"),
-        ("5", "Resolution", "Complaint is resolved")
+        ("1", t("Report", "నివేదించండి"), t("Citizen submits a concern or complaint.", "పౌరుడు సమస్య లేదా ఫిర్యాదును సమర్పిస్తాడు.")),
+        ("2", t("Get ID", "ID పొందండి"), t("A unique complaint ID is generated immediately.", "విశేష Complaint ID వెంటనే రూపొందించబడుతుంది.")),
+        ("3", t("Review", "సమీక్ష"), t("The relevant department reviews the issue.", "సంబంధిత శాఖ సమస్యను సమీక్షిస్తుంది.")),
+        ("4", t("Track", "ట్రాక్"), t("The citizen follows the status and updates.", "పౌరుడు స్థితి మరియు నవీకరణలను పర్యవేక్షిస్తాడు.")),
+        ("5", t("Resolve", "పరిష్కరించు"), t("The matter is addressed and closed transparently.", "సమస్య పారదర్శకంగా పరిష్కరించబడుతుంది."))
     ]
 
     cols = st.columns(5)
 
     for i, step in enumerate(steps):
         with cols[i]:
-            st.metric(step[1], step[0])
-            st.caption(step[2])
+            st.markdown(
+                f"""
+                <div class="step-box">
+                    <div class="step-number">{step[0]}</div>
+                    <h4>{step[1]}</h4>
+                    <p>{step[2]}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+    st.markdown(
+        """
+        <div style="margin-top: 28px; padding: 14px 18px; background: linear-gradient(90deg, #eff6ff 0%, #f8fafc 100%); border: 1px solid #dbeafe; border-radius: 16px; color: #1e3a8a; font-weight: 600;">
+            ✅ Aligned with UN Sustainable Development Goal 16: Peace, Justice and Strong Institutions.
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 elif menu == t("Report a Problem", "సమస్యను నివేదించండి"):
 
@@ -570,6 +771,14 @@ elif menu == t("Track Complaint", "ఫిర్యాదును ట్రా�
         placeholder="JC-20260819-ABC123"
     )
 
+    mobile_to_search = st.text_input(
+        t(
+            "Enter your mobile number to view all submitted complaints",
+            "మీరు సమర్పించిన అన్ని ఫిర్యాదులను చూడటానికి మొబైల్ నంబర్ నమోదు చేయండి"
+        ),
+        placeholder="9876543210"
+    )
+
     if st.button(
         t(
             "Track Complaint",
@@ -686,6 +895,98 @@ elif menu == t("Track Complaint", "ఫిర్యాదును ట్రా�
                         "Complaint ID కనుగొనబడలేదు."
                     )
                 )
+
+        elif mobile_to_search:
+
+            complaints = get_complaints_by_mobile(
+                mobile_to_search.strip()
+            )
+
+            if complaints:
+                st.success(
+                    t(
+                        "Your submitted complaints are listed below.",
+                        "మీరు సమర్పించిన ఫిర్యాదులు క్రింద చూపబడ్డాయి."
+                    )
+                )
+
+                complaint_df = pd.DataFrame(
+                    [
+                        {
+                            "Complaint ID": row["complaint_id"],
+                            "Category": row["category"],
+                            "Department": row["department"],
+                            "Status": row["status"],
+                            "Location": row["location"],
+                            "Submitted": row["created_at"]
+                        }
+                        for row in complaints
+                    ]
+                )
+
+                st.dataframe(
+                    complaint_df,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            else:
+                st.warning(
+                    t(
+                        "No complaints found for this mobile number.",
+                        "ఈ మొబైల్ నంబర్ కోసం ఫిర్యాదులు ఏవీ కనుగొనబడలేదు."
+                    )
+                )
+
+        else:
+            st.warning(
+                t(
+                    "Please enter a Complaint ID or mobile number.",
+                    "Complaint ID లేదా మొబైల్ నంబర్ నమోదు చేయండి."
+                )
+            )
+
+    elif mobile_to_search:
+
+        complaints = get_complaints_by_mobile(
+            mobile_to_search.strip()
+        )
+
+        if complaints:
+            st.success(
+                t(
+                    "Your submitted complaints are listed below.",
+                    "మీరు సమర్పించిన ఫిర్యాదులు క్రింద చూపబడ్డాయి."
+                )
+            )
+
+            complaint_df = pd.DataFrame(
+                [
+                    {
+                        "Complaint ID": row["complaint_id"],
+                        "Category": row["category"],
+                        "Department": row["department"],
+                        "Status": row["status"],
+                        "Location": row["location"],
+                        "Submitted": row["created_at"]
+                    }
+                    for row in complaints
+                ]
+            )
+
+            st.dataframe(
+                complaint_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+        else:
+            st.warning(
+                t(
+                    "No complaints found for this mobile number.",
+                    "ఈ మొబైల్ నంబర్ కోసం ఫిర్యాదులు ఏవీ కనుగొనబడలేదు."
+                )
+            )
 
 elif menu == t("Know Your Rights", "మీ హక్కులు తెలుసుకోండి"):
 
