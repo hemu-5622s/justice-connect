@@ -5,6 +5,7 @@ import smtplib
 import urllib.request
 import urllib.parse
 import streamlit as st
+import streamlit.components.v1 as components
 import sqlite3
 import uuid
 import re
@@ -31,6 +32,9 @@ def get_setting(name, default=None):
         secrets = st.secrets
         if name in secrets and str(secrets[name]).strip() != "":
             return secrets[name]
+        app_secrets = secrets.get("app", {})
+        if name in app_secrets and str(app_secrets[name]).strip() != "":
+            return app_secrets[name]
     except Exception:
         pass
 
@@ -91,12 +95,18 @@ def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobil
     sms_sent = False
 
     if smtp_host and smtp_username and smtp_password:
-        receiver_email = DEPARTMENT_EMAILS.get(department, get_setting("DEFAULT_DEPARTMENT_EMAIL", "support@justiceconnect.gov"))
+        member_email = get_setting(
+            f"MEMBER_EMAIL_{re.sub(r'[^A-Za-z0-9]+', '_', department).strip('_').upper()}"
+        ) or get_setting("MEMBER_EMAIL")
+        receiver_email = member_email or DEPARTMENT_EMAILS.get(
+            department,
+            get_setting("DEFAULT_DEPARTMENT_EMAIL", "support@justiceconnect.gov")
+        )
         recipients = []
 
         if citizen_email:
             recipients.append(citizen_email)
-        if receiver_email:
+        if receiver_email and receiver_email not in recipients:
             recipients.append(receiver_email)
 
         if recipients:
@@ -110,7 +120,7 @@ def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobil
                 f"Complaint ID: {complaint_id}\n"
                 f"Department: {department}\n"
                 f"Summary: {complaint_summary}\n\n"
-                f"The relevant department has also been notified.\n\n"
+                f"The assigned member or department has also been notified at {receiver_email}.\n\n"
                 f"Thank you for using JusticeConnect."
             )
 
@@ -463,6 +473,65 @@ def is_valid_gmail(value):
 
 
 def voice_assistant_input(default_text=""):
+    components.html(
+        """
+        <style>
+            body { font-family: sans-serif; margin: 0; color: #172033; }
+            .voice-box { border: 1px solid #dbe4f0; border-radius: 12px; padding: 14px; background: #f8fbff; }
+            button { border: 0; border-radius: 8px; padding: 10px 14px; background: #123d8c; color: white; cursor: pointer; font-weight: 700; }
+            button.listening { background: #b42318; }
+            #transcript { margin: 10px 0 0; min-height: 22px; color: #394760; }
+            #answer { margin: 8px 0 0; font-weight: 600; }
+        </style>
+        <div class="voice-box">
+            <button id="listen" type="button">🎙️ Speak to Citizen Assistant</button>
+            <div id="transcript">Press the button and ask about complaints, tracking, rights, or services.</div>
+            <div id="answer"></div>
+        </div>
+        <script>
+            const listen = document.getElementById("listen");
+            const transcript = document.getElementById("transcript");
+            const answer = document.getElementById("answer");
+            const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            const respond = (question) => {
+                const q = question.toLowerCase();
+                if (q.includes("complaint") || q.includes("report") || q.includes("problem")) {
+                    return "Use Report a Problem to submit your issue. A unique Complaint ID will be generated.";
+                }
+                if (q.includes("track") || q.includes("status")) {
+                    return "Use Track Complaint and enter your Complaint ID to view the latest status.";
+                }
+                if (q.includes("right")) {
+                    return "Open Know Your Rights to explore basic information about citizen rights.";
+                }
+                if (q.includes("service") || q.includes("certificate")) {
+                    return "Open Government Services to find information about available services.";
+                }
+                return "I can help with complaint reporting, complaint tracking, citizen rights and government services.";
+            };
+            if (!Recognition) {
+                listen.disabled = true;
+                listen.textContent = "Voice input is unavailable in this browser";
+            } else {
+                const recognition = new Recognition();
+                recognition.lang = "en-IN";
+                recognition.interimResults = false;
+                recognition.onstart = () => { listen.classList.add("listening"); listen.textContent = "Listening..."; };
+                recognition.onend = () => { listen.classList.remove("listening"); listen.textContent = "🎙️ Speak to Citizen Assistant"; };
+                recognition.onerror = () => { answer.textContent = "Microphone access was not available. Use the text box below."; };
+                recognition.onresult = (event) => {
+                    const text = event.results[0][0].transcript;
+                    transcript.textContent = "You said: " + text;
+                    answer.textContent = respond(text);
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(new SpeechSynthesisUtterance(respond(text)));
+                };
+                listen.onclick = () => recognition.start();
+            }
+        </script>
+        """,
+        height=205
+    )
     value = st.text_input(
         "Ask your question",
         value=default_text,
