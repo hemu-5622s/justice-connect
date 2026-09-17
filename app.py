@@ -8,7 +8,7 @@ import streamlit as st
 import sqlite3
 import uuid
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 import pandas as pd
 import plotly.express as px
@@ -477,8 +477,8 @@ def voice_assistant_input(default_text=""):
 def t(en, te):
     return te if st.session_state.language == "Telugu" else en
 
-cleanup_expired_complaints()
 init_db()
+cleanup_expired_complaints()
 
 if "language" not in st.session_state:
     st.session_state.language = "English"
