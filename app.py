@@ -1,7 +1,15 @@
+import os
+import json
+import base64
+import smtplib
+import urllib.request
+import urllib.parse
 import streamlit as st
 import sqlite3
 import uuid
+import re
 from datetime import datetime
+from email.message import EmailMessage
 import pandas as pd
 import plotly.express as px
 
@@ -13,6 +21,149 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+def get_setting(name, default=None):
+    value = os.getenv(name)
+    if value is not None and str(value).strip() != "":
+        return value
+
+    try:
+        secrets = st.secrets
+        if name in secrets and str(secrets[name]).strip() != "":
+            return secrets[name]
+    except Exception:
+        pass
+
+    return default
+
+
+DEPARTMENT_EMAILS = {
+    "Municipal Administration": get_setting("DEPT_MUNICIPAL_EMAIL", "municipal@justiceconnect.gov"),
+    "Police Department": get_setting("DEPT_POLICE_EMAIL", "police@justiceconnect.gov"),
+    "Electricity Department": get_setting("DEPT_ELECTRICITY_EMAIL", "electricity@justiceconnect.gov"),
+    "Water Supply Department": get_setting("DEPT_WATER_EMAIL", "watersupply@justiceconnect.gov"),
+    "Transport Department": get_setting("DEPT_TRANSPORT_EMAIL", "transport@justiceconnect.gov"),
+    "Revenue Department": get_setting("DEPT_REVENUE_EMAIL", "revenue@justiceconnect.gov"),
+    "Education Department": get_setting("DEPT_EDUCATION_EMAIL", "education@justiceconnect.gov"),
+    "Health Department": get_setting("DEPT_HEALTH_EMAIL", "health@justiceconnect.gov"),
+    "Other": get_setting("DEPT_OTHER_EMAIL", "support@justiceconnect.gov")
+}
+
+
+def send_sms_to_mobile(mobile, message):
+    account_sid = get_setting("TWILIO_ACCOUNT_SID")
+    auth_token = get_setting("TWILIO_AUTH_TOKEN")
+    from_number = get_setting("TWILIO_FROM_NUMBER")
+
+    if not account_sid or not auth_token or not from_number or not mobile:
+        return False
+
+    try:
+        data = urllib.parse.urlencode({
+            "To": mobile,
+            "From": from_number,
+            "Body": message
+        }).encode()
+        auth = base64.b64encode(f"{account_sid}:{auth_token}".encode("utf-8")).decode("ascii")
+        request = urllib.request.Request(
+            f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+            data=data,
+            headers={
+                "Authorization": f"Basic {auth}",
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+        )
+        with urllib.request.urlopen(request, timeout=20) as response:
+            response.read()
+        return True
+    except Exception:
+        return False
+
+
+def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobile, department, complaint_summary):
+    smtp_host = get_setting("SMTP_HOST")
+    smtp_port = int(get_setting("SMTP_PORT", "587"))
+    smtp_username = get_setting("SMTP_USERNAME")
+    smtp_password = get_setting("SMTP_PASSWORD")
+    from_email = get_setting("SMTP_FROM_EMAIL") or smtp_username or "noreply@justiceconnect.gov"
+
+    email_sent = False
+    sms_sent = False
+
+    if smtp_host and smtp_username and smtp_password:
+        receiver_email = DEPARTMENT_EMAILS.get(department, get_setting("DEFAULT_DEPARTMENT_EMAIL", "support@justiceconnect.gov"))
+        recipients = []
+
+        if citizen_email:
+            recipients.append(citizen_email)
+        if receiver_email:
+            recipients.append(receiver_email)
+
+        if recipients:
+            msg = EmailMessage()
+            msg["Subject"] = f"Complaint Submitted - {complaint_id}"
+            msg["From"] = from_email
+            msg["To"] = ", ".join(recipients)
+            msg.set_content(
+                f"Dear {citizen_name},\n\n"
+                f"Your complaint has been submitted successfully.\n"
+                f"Complaint ID: {complaint_id}\n"
+                f"Department: {department}\n"
+                f"Summary: {complaint_summary}\n\n"
+                f"The relevant department has also been notified.\n\n"
+                f"Thank you for using JusticeConnect."
+            )
+
+            try:
+                if smtp_port == 465:
+                    server = smtplib.SMTP_SSL(smtp_host, smtp_port)
+                else:
+                    server = smtplib.SMTP(smtp_host, smtp_port)
+                    server.starttls()
+                server.login(smtp_username, smtp_password)
+                server.send_message(msg)
+                server.quit()
+                email_sent = True
+            except Exception:
+                email_sent = False
+
+    if mobile:
+        sms_message = (
+            f"Your complaint {complaint_id} has been submitted successfully. "
+            f"Department: {department}."
+        )
+        sms_sent = send_sms_to_mobile(mobile, sms_message)
+
+    return email_sent or sms_sent
+
+
+def cleanup_expired_complaints(days=30):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
+    expired = cur.execute(
+        "SELECT complaint_id FROM complaints WHERE created_at < ?",
+        (cutoff,)
+    ).fetchall()
+
+    expired_ids = [row[0] for row in expired]
+
+    if expired_ids:
+        placeholders = ", ".join("?" for _ in expired_ids)
+        cur.execute(
+            f"DELETE FROM status_history WHERE complaint_id IN ({placeholders})",
+            tuple(expired_ids)
+        )
+        cur.execute(
+            f"DELETE FROM complaints WHERE complaint_id IN ({placeholders})",
+            tuple(expired_ids)
+        )
+
+    conn.commit()
+    conn.close()
+
 
 def get_db():
     conn = sqlite3.connect(DB_NAME)
@@ -77,6 +228,14 @@ def init_db():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL
+        )
+    """)
+
     cur.execute(
         "INSERT OR IGNORE INTO admins (username, password) VALUES (?, ?)",
         ("admin", "admin123")
@@ -89,6 +248,20 @@ def init_db():
         ON CONFLICT(username) DO UPDATE SET password = excluded.password
         """,
         ("Hemu", "hemu5622s")
+    )
+
+    cur.execute(
+        "INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)",
+        ("citizen", "citizen123")
+    )
+
+    cur.execute(
+        """
+        INSERT INTO users (username, password)
+        VALUES (?, ?)
+        ON CONFLICT(username) DO UPDATE SET password = excluded.password
+        """,
+        ("user", "user123")
     )
 
     conn.commit()
@@ -262,9 +435,49 @@ def login_admin(username, password):
 
     return admin is not None
 
+
+def login_user(username, password):
+    conn = get_db()
+
+    user = conn.execute("""
+        SELECT *
+        FROM users
+        WHERE username = ? AND password = ?
+    """, (
+        username,
+        password
+    )).fetchone()
+
+    conn.close()
+
+    return user is not None
+
+def is_valid_mobile_number(value):
+    value = (value or "").strip()
+    return bool(re.fullmatch(r"\+91[6-9]\d{9}", value))
+
+
+def is_valid_gmail(value):
+    value = (value or "").strip()
+    return bool(re.fullmatch(r"[A-Za-z0-9._%+\-]+@gmail\.com", value))
+
+
+def voice_assistant_input(default_text=""):
+    value = st.text_input(
+        "Ask your question",
+        value=default_text,
+        key="voice_assistant_input_box"
+    )
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        st.caption("🎙️ Voice input works in supported browsers")
+    return value
+
+
 def t(en, te):
     return te if st.session_state.language == "Telugu" else en
 
+cleanup_expired_complaints()
 init_db()
 
 if "language" not in st.session_state:
@@ -272,6 +485,9 @@ if "language" not in st.session_state:
 
 if "admin_logged_in" not in st.session_state:
     st.session_state.admin_logged_in = False
+
+if "user_logged_in" not in st.session_state:
+    st.session_state.user_logged_in = False
 
 st.markdown("""
 <style>
@@ -282,11 +498,12 @@ st.markdown("""
     }
 
     .hero {
-        background: linear-gradient(135deg, #0f172a 0%, #1d4ed8 45%, #3b82f6 100%);
-        border-radius: 24px;
-        padding: 32px 28px;
-        margin-bottom: 22px;
-        box-shadow: 0 16px 40px rgba(30, 64, 175, 0.22);
+        background: linear-gradient(135deg, #0b1020 0%, #123d8c 38%, #3b82f6 100%);
+        border-radius: 28px;
+        padding: 34px 30px;
+        margin-bottom: 26px;
+        box-shadow: 0 18px 42px rgba(37, 99, 235, 0.25);
+        border: 1px solid rgba(255,255,255,0.08);
     }
 
     .hero-badge {
@@ -304,8 +521,8 @@ st.markdown("""
     }
 
     .hero-title {
-        font-size: clamp(2.2rem, 4vw, 3.7rem);
-        line-height: 1.1;
+        font-size: clamp(2.3rem, 4vw, 4rem);
+        line-height: 1.08;
         font-weight: 800;
         color: #ffffff;
         margin: 0 0 14px 0;
@@ -314,8 +531,9 @@ st.markdown("""
     .hero-subtitle {
         color: #dbeafe;
         font-size: 1.08rem;
-        max-width: 680px;
+        max-width: 720px;
         margin-bottom: 18px;
+        line-height: 1.7;
     }
 
     .hero-pill-row {
@@ -333,6 +551,74 @@ st.markdown("""
         padding: 8px 14px;
         font-size: 0.82rem;
         font-weight: 600;
+    }
+
+    .hero-panel {
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: 22px;
+        padding: 20px;
+        color: white;
+    }
+
+    .hero-panel h4 {
+        margin: 0 0 14px 0;
+        font-size: 1.05rem;
+        color: #f8fafc;
+    }
+
+    .hero-panel .stat-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 12px;
+    }
+
+    .mini-stat {
+        background: rgba(15, 23, 42, 0.18);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 14px;
+        padding: 12px 10px;
+    }
+
+    .mini-stat strong {
+        display: block;
+        font-size: 1.2rem;
+        margin-bottom: 4px;
+    }
+
+    .mini-stat span {
+        color: #dbeafe;
+        font-size: 0.8rem;
+    }
+
+    .cta-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 18px;
+    }
+
+    .cta-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 18px;
+        border-radius: 12px;
+        font-weight: 700;
+        text-decoration: none;
+        border: 1px solid transparent;
+    }
+
+    .cta-btn.primary {
+        background: #f8fafc;
+        color: #0f172a;
+    }
+
+    .cta-btn.secondary {
+        background: transparent;
+        color: white;
+        border-color: rgba(255,255,255,0.25);
     }
 
     .section-label {
@@ -450,6 +736,7 @@ menu = st.sidebar.radio(
     t("Navigation", "నావిగేషన్"),
     [
         t("Home", "హోమ్"),
+        t("User Login", "వినియోగదారు లాగిన్"),
         t("Report a Problem", "సమస్యను నివేదించండి"),
         t("Track Complaint", "ఫిర్యాదును ట్రాక్ చేయండి"),
         t("Know Your Rights", "మీ హక్కులు తెలుసుకోండి"),
@@ -467,18 +754,22 @@ if menu == t("Home", "హోమ్"):
         <div class="hero">
             <div class="hero-badge">⚖️ JusticeConnect</div>
             <h1 class="hero-title">A stronger voice for every citizen.</h1>
-            <p class="hero-subtitle">Report issues, understand your rights, access government services, and track every update in one secure, transparent platform.</p>
+            <p class="hero-subtitle">Report issues, understand your rights, access government services, and track complaint updates in one transparent and citizen-first platform.</p>
+            <div class="cta-row">
+                <a class="cta-btn primary" href="#">📝 Report a problem</a>
+                <a class="cta-btn secondary" href="#">🔎 Track complaint</a>
+            </div>
             <div class="hero-pill-row">
-                <span class="hero-pill">📝 Complaint Reporting</span>
-                <span class="hero-pill">🔎 Smart Tracking</span>
-                <span class="hero-pill">⚖️ Rights & Support</span>
+                <span class="hero-pill">⚡ Fast Submission</span>
+                <span class="hero-pill">📡 SMS + Email Alerts</span>
+                <span class="hero-pill">🧭 Civic Support</span>
             </div>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    col_left, col_right = st.columns([2.2, 1])
+    col_left, col_right = st.columns([2, 1])
 
     with col_left:
         st.markdown(
@@ -486,19 +777,20 @@ if menu == t("Home", "హోమ్"):
             unsafe_allow_html=True
         )
         st.markdown(
-            f'<div class="subtitle">{t("JusticeConnect gives citizens a clear path to report problems, access public services, learn their rights, and stay informed through transparent grievance handling.", "JusticeConnect పౌరులకు సమస్యలను నివేదించడం, ప్రభుత్వ సేవలను ఉపయోగించడం, వారి హక్కులను తెలుసుకోవడం మరియు పారదర్శకమైన ఫిర్యాదు పరిష్కారం ద్వారా సమాచారం పొందే స్పష్టమైన మార్గాన్ని అందిస్తుంది.")}</div>',
+            f'<div class="subtitle">{t("JusticeConnect gives citizens a direct path to report problems, discover public services, understand their rights, and stay informed through transparent grievance handling.", "JusticeConnect పౌరులకు సమస్యలను నివేదించేందుకు, ప్రభుత్వ సేవలను తెలుసుకునేందుకు, వారి హక్కులను అర్థం చేసుకునేందుకు మరియు పారదర్శకమైన ఫిర్యాదు పరిష్కారంతో సమాచారం పొందేందుకు స్పష్టమైన మార్గాన్ని అందిస్తుంది.")}</div>',
             unsafe_allow_html=True
         )
 
     with col_right:
         st.markdown(
             """
-            <div class="info-panel">
+            <div class="hero-panel">
                 <h4>📊 Platform Snapshot</h4>
-                <div style="display: grid; gap: 12px;">
-                    <div><strong>Public reporting</strong><br><span style="color:#475569;">Simple complaint submission</span></div>
-                    <div><strong>Live status tracking</strong><br><span style="color:#475569;">Track each update with a complaint ID</span></div>
-                    <div><strong>Rights guidance</strong><br><span style="color:#475569;">Understand available civic protections</span></div>
+                <div class="stat-row">
+                    <div class="mini-stat"><strong>24/7</strong><span>Citizen support</span></div>
+                    <div class="mini-stat"><strong>30D</strong><span>Auto retention</span></div>
+                    <div class="mini-stat"><strong>SMS</strong><span>Email alerts</span></div>
+                    <div class="mini-stat"><strong>Live</strong><span>Status updates</span></div>
                 </div>
             </div>
             """,
@@ -518,7 +810,7 @@ if menu == t("Home", "హోమ్"):
             <div class="feature-card">
                 <div style="font-size: 2rem;">📝</div>
                 <h3>Report</h3>
-                <p>Submit civic issues, local problems, or service complaints in a few simple steps.</p>
+                <p>Submit civic issues, local problems, or service complaints in just a few steps.</p>
             </div>
             """,
             unsafe_allow_html=True
@@ -530,7 +822,7 @@ if menu == t("Home", "హోమ్"):
             <div class="feature-card">
                 <div style="font-size: 2rem;">🔎</div>
                 <h3>Track</h3>
-                <p>Use your Complaint ID to review the latest status and updates in real time.</p>
+                <p>Use your Complaint ID to follow the latest status and updates in real time.</p>
             </div>
             """,
             unsafe_allow_html=True
@@ -610,11 +902,13 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
             )
 
             mobile = st.text_input(
-                t("Mobile Number *", "మొబైల్ నంబర్ *")
+                t("Mobile Number *", "మొబైల్ నంబర్ *"),
+                placeholder="+919876543210"
             )
 
             email = st.text_input(
-                t("Email", "ఇమెయిల్")
+                t("Email *", "ఇమెయిల్ *"),
+                placeholder="yourname@gmail.com"
             )
 
             category = st.selectbox(
@@ -629,7 +923,8 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
                     "Government Service",
                     "Education",
                     "Healthcare",
-                    "Other"
+                    "Other",
+                    "OT"
                 ]
             )
 
@@ -646,7 +941,8 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
                     "Revenue Department",
                     "Education Department",
                     "Health Department",
-                    "Other"
+                    "Other",
+                    "OT"
                 ]
             )
 
@@ -691,15 +987,37 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
 
     if submitted:
 
-        if not name or not mobile or not location or not description:
+        mobile = (mobile or "").strip()
+        email = (email or "").strip()
 
+        if not name or not mobile or not email or not location or not description:
             st.error(
                 t(
                     "Please fill all required fields.",
                     "అవసరమైన అన్ని వివరాలను నమోదు చేయండి."
                 )
             )
-
+        elif not mobile.isdigit() and not mobile.startswith("+91"):
+            st.error(
+                t(
+                    "Phone number must start with +91 and contain only digits after the prefix.",
+                    "మొబైల్ నంబర్ +91 తో ప్రారంభించి, ప్రిఫిక్స్ తర్వాత మాత్రమే అంకెలను కలిగి ఉండాలి."
+                )
+            )
+        elif not is_valid_mobile_number(mobile):
+            st.error(
+                t(
+                    "Phone number must be in the format +91XXXXXXXXXX with 10 digits after +91.",
+                    "ఫోన్ నంబర్ +91XXXXXXXXXX ఫార్మాట్‌లో ఉండాలి, +91 తర్వాత 10 అంకెలు ఉండాలి."
+                )
+            )
+        elif not is_valid_gmail(email):
+            st.error(
+                t(
+                    "Email must be a valid Gmail address ending with @gmail.com.",
+                    "ఇమెయిల్ తప్పనిసరిగా Gmail రూపంలో ఉండాలి, @gmail.com తో ముగియాలి."
+                )
+            )
         else:
 
             attachment = None
@@ -724,6 +1042,30 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
                 attachment_name,
                 attachment_type
             )
+
+            notification_sent = send_complaint_notification(
+                complaint_id,
+                name,
+                email,
+                mobile,
+                department,
+                description
+            )
+
+            if notification_sent:
+                st.info(
+                    t(
+                        "A confirmation email has been sent to the citizen and the receiving department.",
+                        "సిటిజన్ మరియు అంద받ే శాఖకు కన్ఫర్మేషన్ ఇమెయిల్ పంపబడింది."
+                    )
+                )
+            else:
+                st.info(
+                    t(
+                        "Complaint saved successfully. Email sending is not enabled yet until SMTP settings are configured.",
+                        "ఫిర్యాదు సేవ్ చేయబడింది. SMTP సెట్టింగులు కాన్ఫిగర్ చేయకపోతే ఇమెయిల్ పంపడం అందుబాటులో ఉండదు."
+                    )
+                )
 
             st.success(
                 t(
@@ -1100,12 +1442,12 @@ elif menu == t("Citizen Assistant", "సిటిజన్ అసిస్టె
         "సిటిజన్ అసిస్టెంట్"
     ))
 
-    question = st.text_input(
-        t(
-            "Ask your question",
-            "మీ ప్రశ్న అడగండి"
-        )
+    question = voice_assistant_input(
+        st.session_state.get("voice_question", "")
     )
+
+    if question:
+        st.session_state["voice_question"] = question
 
     if st.button(
         t(
@@ -1279,6 +1621,67 @@ elif menu == t("Transparency Dashboard", "పారదర్శకత డ్య�
             "No complaints have been submitted yet."
         )
 
+elif menu == t("User Login", "వినియోగదారు లాగిన్"):
+
+    if not st.session_state.user_logged_in:
+
+        st.title("👤 User Login")
+
+        username = st.text_input(
+            "Username"
+        )
+
+        password = st.text_input(
+            "Password",
+            type="password"
+        )
+
+        if st.button(
+            "Login as User",
+            use_container_width=True
+        ):
+
+            if login_user(
+                username,
+                password
+            ):
+
+                st.session_state.user_logged_in = True
+                st.session_state.admin_logged_in = False
+                st.success(
+                    "User login successful."
+                )
+                st.rerun()
+
+            else:
+
+                st.error(
+                    "Invalid username or password."
+                )
+
+        st.info(
+            "Demo user credentials: user / user123"
+        )
+
+    else:
+
+        st.title("👤 Citizen Dashboard")
+
+        if st.button(
+            "Logout",
+            use_container_width=True
+        ):
+
+            st.session_state.user_logged_in = False
+            st.rerun()
+
+        st.success(
+            "You are logged in as a citizen user."
+        )
+        st.info(
+            "You can now report complaints and track them."
+        )
+
 elif menu == t("Admin Login", "అడ్మిన్ లాగిన్"):
 
     if not st.session_state.admin_logged_in:
@@ -1305,6 +1708,7 @@ elif menu == t("Admin Login", "అడ్మిన్ లాగిన్"):
             ):
 
                 st.session_state.admin_logged_in = True
+                st.session_state.user_logged_in = False
                 st.success(
                     "Login successful."
                 )
@@ -1317,7 +1721,7 @@ elif menu == t("Admin Login", "అడ్మిన్ లాగిన్"):
                 )
 
         st.info(
-            "Demo credentials: admin / admin123"
+            "Demo credentials: HEMU / hemu@5622s"
         )
 
     else:
