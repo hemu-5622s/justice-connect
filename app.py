@@ -14,7 +14,7 @@ from email.message import EmailMessage
 import pandas as pd
 import plotly.express as px
 
-DB_NAME = "justiceconnect.db"
+DB_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "justiceconnect.db")
 
 st.set_page_config(
     page_title="JusticeConnect",
@@ -39,6 +39,12 @@ def get_setting(name, default=None):
         pass
 
     return default
+
+
+try:
+    COMPLAINT_RETENTION_DAYS = max(1, int(get_setting("COMPLAINT_RETENTION_DAYS", "30")))
+except (TypeError, ValueError):
+    COMPLAINT_RETENTION_DAYS = 30
 
 
 DEPARTMENT_EMAILS = {
@@ -85,16 +91,28 @@ def send_sms_to_mobile(mobile, message):
 
 
 def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobile, department, complaint_summary):
-    smtp_host = get_setting("SMTP_HOST")
-    smtp_port = int(get_setting("SMTP_PORT", "587"))
+    smtp_server = get_setting("SMTP_SERVER")
+    try:
+        smtp_port = int(get_setting("SMTP_PORT"))
+    except (TypeError, ValueError):
+        smtp_port = None
     smtp_username = get_setting("SMTP_USERNAME")
     smtp_password = get_setting("SMTP_PASSWORD")
-    from_email = get_setting("SMTP_FROM_EMAIL") or smtp_username or "noreply@justiceconnect.gov"
+    from_email = smtp_username
 
     email_sent = False
     sms_sent = False
+    email_error = None
+    sms_error = None
+    notification_message = (
+        f"Your complaint {complaint_id} was registered successfully.\n"
+        f"Complaint ID: {complaint_id}\n"
+        f"Department: {department}."
+    )
 
-    if smtp_host and smtp_username and smtp_password:
+    if not smtp_server or not smtp_port or not smtp_username or not smtp_password:
+        email_error = "SMTP configuration is missing. Add SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, and SMTP_PASSWORD to Streamlit Secrets."
+    else:
         member_email = get_setting(
             f"MEMBER_EMAIL_{re.sub(r'[^A-Za-z0-9]+', '_', department).strip('_').upper()}"
         ) or get_setting("MEMBER_EMAIL")
@@ -114,37 +132,37 @@ def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobil
             msg["Subject"] = f"Complaint Submitted - {complaint_id}"
             msg["From"] = from_email
             msg["To"] = ", ".join(recipients)
-            msg.set_content(
-                f"Dear {citizen_name},\n\n"
-                f"Your complaint has been submitted successfully.\n"
-                f"Complaint ID: {complaint_id}\n"
-                f"Department: {department}\n"
-                f"Summary: {complaint_summary}\n\n"
-                f"The assigned member or department has also been notified at {receiver_email}.\n\n"
-                f"Thank you for using JusticeConnect."
-            )
+            msg.set_content(notification_message)
 
             try:
-                if smtp_port == 465:
-                    server = smtplib.SMTP_SSL(smtp_host, smtp_port)
-                else:
-                    server = smtplib.SMTP(smtp_host, smtp_port)
-                    server.starttls()
-                server.login(smtp_username, smtp_password)
-                server.send_message(msg)
-                server.quit()
+                server = smtplib.SMTP(smtp_server, smtp_port)
+                server.starttls()
+                with server:
+                    server.login(smtp_username, smtp_password)
+                    server.send_message(msg)
                 email_sent = True
-            except Exception:
+            except (OSError, smtplib.SMTPException) as exc:
+                email_error = f"SMTP could not send the confirmation email: {exc}"
                 email_sent = False
 
     if mobile:
-        sms_message = (
-            f"Your complaint {complaint_id} has been submitted successfully. "
-            f"Department: {department}."
+        sms_configured = all(
+            get_setting(key)
+            for key in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER")
         )
-        sms_sent = send_sms_to_mobile(mobile, sms_message)
+        if not sms_configured:
+            sms_error = "SMS configuration is missing. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER to Streamlit Secrets."
+        else:
+            sms_sent = send_sms_to_mobile(mobile, notification_message)
+            if not sms_sent:
+                sms_error = "SMS could not be sent. Check the Twilio credentials, sender number, and destination number."
 
-    return email_sent or sms_sent
+    return {
+        "email_sent": email_sent,
+        "sms_sent": sms_sent,
+        "email_error": email_error,
+        "sms_error": sms_error
+    }
 
 
 def cleanup_expired_complaints(days=30):
@@ -467,6 +485,13 @@ def is_valid_mobile_number(value):
     return bool(re.fullmatch(r"\+91[6-9]\d{9}", value))
 
 
+def normalize_mobile_number(value):
+    value = (value or "").strip()
+    if re.fullmatch(r"[6-9]\d{9}", value):
+        return "+91" + value
+    return value
+
+
 def is_valid_gmail(value):
     value = (value or "").strip()
     return bool(re.fullmatch(r"[A-Za-z0-9._%+\-]+@gmail\.com", value))
@@ -547,7 +572,7 @@ def t(en, te):
     return te if st.session_state.language == "Telugu" else en
 
 init_db()
-cleanup_expired_complaints()
+cleanup_expired_complaints(COMPLAINT_RETENTION_DAYS)
 
 if "language" not in st.session_state:
     st.session_state.language = "English"
@@ -971,8 +996,12 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
             )
 
             mobile = st.text_input(
-                t("Mobile Number *", "మొబైల్ నంబర్ *"),
-                placeholder="+919876543210"
+                t("Mobile Number * (+91)", "మొబైల్ నంబర్ * (+91)"),
+                placeholder="9876543210 or +919876543210",
+                help=t(
+                    "Enter 10 digits; +91 is added automatically for SMS and storage.",
+                    "10 అంకెలను నమోదు చేయండి; SMS మరియు సేవ్ కోసం +91 స్వయంచాలకంగా జోడించబడుతుంది."
+                )
             )
 
             email = st.text_input(
@@ -1057,6 +1086,7 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
     if submitted:
 
         mobile = (mobile or "").strip()
+        mobile = normalize_mobile_number(mobile)
         email = (email or "").strip()
 
         if not name or not mobile or not email or not location or not description:
@@ -1112,7 +1142,7 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
                 attachment_type
             )
 
-            notification_sent = send_complaint_notification(
+            notification_result = send_complaint_notification(
                 complaint_id,
                 name,
                 email,
@@ -1121,20 +1151,27 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
                 description
             )
 
-            if notification_sent:
+            if notification_result["email_sent"]:
                 st.info(
                     t(
-                        "A confirmation email has been sent to the citizen and the receiving department.",
-                        "సిటిజన్ మరియు అంద받ే శాఖకు కన్ఫర్మేషన్ ఇమెయిల్ పంపబడింది."
+                        "A confirmation email has been sent to the email address you provided.",
+                        "మీరు అందించిన ఇమెయిల్ చిరునామాకు నిర్ధారణ ఇమెయిల్ పంపబడింది."
                     )
                 )
+            elif notification_result["email_error"]:
+                st.warning(notification_result["email_error"])
             else:
-                st.info(
+                st.warning(
                     t(
-                        "Complaint saved successfully. Email sending is not enabled yet until SMTP settings are configured.",
-                        "ఫిర్యాదు సేవ్ చేయబడింది. SMTP సెట్టింగులు కాన్ఫిగర్ చేయకపోతే ఇమెయిల్ పంపడం అందుబాటులో ఉండదు."
+                        "Complaint saved, but confirmation email was not sent because SMTP settings are missing.",
+                        "ఫిర్యాదు సేవ్ చేయబడింది, కానీ SMTP సెట్టింగులు లేనందున నిర్ధారణ ఇమెయిల్ పంపబడలేదు."
                     )
                 )
+
+            if notification_result["sms_sent"]:
+                st.info("A confirmation SMS has been sent to the mobile number you provided.")
+            elif notification_result["sms_error"]:
+                st.warning(notification_result["sms_error"])
 
             st.success(
                 t(
@@ -1187,7 +1224,7 @@ elif menu == t("Track Complaint", "ఫిర్యాదును ట్రా�
             "Enter your mobile number to view all submitted complaints",
             "మీరు సమర్పించిన అన్ని ఫిర్యాదులను చూడటానికి మొబైల్ నంబర్ నమోదు చేయండి"
         ),
-        placeholder="9876543210"
+                placeholder="+919876543210 or 9876543210"
     )
 
     if st.button(
@@ -1310,7 +1347,7 @@ elif menu == t("Track Complaint", "ఫిర్యాదును ట్రా�
         elif mobile_to_search:
 
             complaints = get_complaints_by_mobile(
-                mobile_to_search.strip()
+                normalize_mobile_number(mobile_to_search)
             )
 
             if complaints:
@@ -1360,7 +1397,7 @@ elif menu == t("Track Complaint", "ఫిర్యాదును ట్రా�
     elif mobile_to_search:
 
         complaints = get_complaints_by_mobile(
-            mobile_to_search.strip()
+            normalize_mobile_number(mobile_to_search)
         )
 
         if complaints:
