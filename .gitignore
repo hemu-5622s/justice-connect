@@ -5,6 +5,7 @@ __pycache__/
 
 # Local application data
 justiceconnect.db
+Untitled-1.txt
 
 # Secrets and local configuration
 .env
