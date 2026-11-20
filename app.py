@@ -1180,13 +1180,6 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
                 )
             elif notification_result["email_error"]:
                 st.warning(notification_result["email_error"])
-            else:
-                st.warning(
-                    t(
-                        "Complaint saved, but confirmation email was not sent because SMTP settings are missing.",
-                        "ఫిర్యాదు సేవ్ చేయబడింది, కానీ SMTP సెట్టింగులు లేనందున నిర్ధారణ ఇమెయిల్ పంపబడలేదు."
-                    )
-                )
 
             if notification_result["sms_sent"]:
                 st.info("A confirmation SMS has been sent to the mobile number you provided.")
