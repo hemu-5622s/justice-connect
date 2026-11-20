@@ -1180,6 +1180,13 @@ elif menu == t("Report a Problem", "సమస్యను నివేదిం�
                 )
             elif notification_result["email_error"]:
                 st.warning(notification_result["email_error"])
+            else:
+                st.info(
+                    t(
+                        "Complaint saved, but no confirmation email was sent. Configure SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, and SMTP_PASSWORD in Streamlit Secrets to receive email confirmations.",
+                        "ఫిర్యాదు సేవ్ చేయబడింది, కానీ నిర్ధారణ ఇమెయిల్ పంపబడలేదు. ఇమెయిల్ నిర్ధారణలు పొందడానికి Streamlit Secrets లో SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD సెట్టింగులను కాన్ఫిగర్ చేయండి."
+                    )
+                )
 
             if notification_result["sms_sent"]:
                 st.info("A confirmation SMS has been sent to the mobile number you provided.")
