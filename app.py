@@ -126,9 +126,7 @@ def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobil
         f"Department: {department}."
     )
 
-    if not smtp_server or not smtp_port or not smtp_username or not smtp_password:
-        email_error = "SMTP configuration is missing. Add SMTP_SERVER, SMTP_PORT, SMTP_USERNAME, and SMTP_PASSWORD to Streamlit Secrets."
-    else:
+    if smtp_server and smtp_port and smtp_username and smtp_password:
         member_email = get_setting(
             f"MEMBER_EMAIL_{re.sub(r'[^A-Za-z0-9]+', '_', department).strip('_').upper()}"
         ) or get_setting("MEMBER_EMAIL")
@@ -174,9 +172,7 @@ def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobil
             get_setting(key)
             for key in ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER")
         )
-        if not sms_configured:
-            sms_error = "SMS configuration is missing. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER to Streamlit Secrets."
-        else:
+        if sms_configured:
             sms_sent, sms_error = send_sms_to_mobile(mobile, notification_message)
             if not sms_sent:
                 sms_error = f"SMS could not be sent. {sms_error}"
