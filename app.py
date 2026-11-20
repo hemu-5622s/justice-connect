@@ -2,6 +2,8 @@ import os
 import json
 import base64
 import smtplib
+import ssl
+import urllib.error
 import urllib.request
 import urllib.parse
 import streamlit as st
@@ -66,7 +68,7 @@ def send_sms_to_mobile(mobile, message):
     from_number = get_setting("TWILIO_FROM_NUMBER")
 
     if not account_sid or not auth_token or not from_number or not mobile:
-        return False
+        return False, "Twilio SMS settings or destination number are missing."
 
     try:
         data = urllib.parse.urlencode({
@@ -85,9 +87,23 @@ def send_sms_to_mobile(mobile, message):
         )
         with urllib.request.urlopen(request, timeout=20) as response:
             response.read()
-        return True
-    except Exception:
-        return False
+        return True, None
+    except urllib.error.HTTPError as exc:
+        try:
+            response_data = json.loads(exc.read().decode("utf-8"))
+            if not isinstance(response_data, dict):
+                raise ValueError("Unexpected Twilio error response")
+            error_message = response_data.get("message", str(exc.reason))
+            error_code = response_data.get("code")
+            details = (
+                f"Twilio error {error_code}: {error_message}"
+                if error_code else f"Twilio error: {error_message}"
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, OSError):
+            details = f"Twilio rejected the SMS request (HTTP {exc.code})."
+        return False, details
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return False, f"Could not connect to Twilio: {exc}"
 
 
 def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobile, department, complaint_summary):
@@ -135,14 +151,22 @@ def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobil
             msg.set_content(notification_message)
 
             try:
-                server = smtplib.SMTP(smtp_server, smtp_port)
-                server.starttls()
-                with server:
+                smtp_class = smtplib.SMTP_SSL if smtp_port == 465 else smtplib.SMTP
+                smtp_options = {"context": ssl.create_default_context()} if smtp_port == 465 else {}
+                with smtp_class(smtp_server, smtp_port, timeout=20, **smtp_options) as server:
+                    if smtp_port != 465:
+                        server.ehlo()
+                        server.starttls(context=ssl.create_default_context())
+                        server.ehlo()
                     server.login(smtp_username, smtp_password)
                     server.send_message(msg)
                 email_sent = True
             except (OSError, smtplib.SMTPException) as exc:
-                email_error = f"SMTP could not send the confirmation email: {exc}"
+                email_error = (
+                    f"SMTP could not send the confirmation email: {exc} "
+                    "Check that SMTP_PORT is 587 for STARTTLS or 465 for SSL, "
+                    "and that the username and app password are valid."
+                )
                 email_sent = False
 
     if mobile:
@@ -153,9 +177,9 @@ def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobil
         if not sms_configured:
             sms_error = "SMS configuration is missing. Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER to Streamlit Secrets."
         else:
-            sms_sent = send_sms_to_mobile(mobile, notification_message)
+            sms_sent, sms_error = send_sms_to_mobile(mobile, notification_message)
             if not sms_sent:
-                sms_error = "SMS could not be sent. Check the Twilio credentials, sender number, and destination number."
+                sms_error = f"SMS could not be sent. {sms_error}"
 
     return {
         "email_sent": email_sent,
