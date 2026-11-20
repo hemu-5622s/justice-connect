@@ -113,7 +113,7 @@ def send_complaint_notification(complaint_id, citizen_name, citizen_email, mobil
     except (TypeError, ValueError):
         smtp_port = None
     smtp_username = get_setting("SMTP_USERNAME")
-    smtp_password = get_setting("SMTP_PASSWORD")
+    smtp_password = re.sub(r"\s+", "", get_setting("SMTP_PASSWORD") or "")
     from_email = smtp_username
 
     email_sent = False
